@@ -181,6 +181,15 @@ class rpc(object):
         return _
 
 
+from concurrent.futures import ThreadPoolExecutor
+executor = ThreadPoolExecutor(50)
+
+
+def delay(loop, func, *args, **kwargs):
+    """ Run function in separate thread, turn into coroutine """
+    future = executor.submit(func, *args, **kwargs)
+    return asyncio.futures.wrap_future(future, loop=loop)
+
 
 if __name__ == '__main__':
     signal.signal(signal.SIGINT, handle_signal)

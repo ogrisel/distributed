@@ -53,6 +53,7 @@ class Center(Server):
                 d.items()}
 
         super(Center, self).__init__(d)
+        self.listen(self.port)
 
     @gen.coroutine
     def terminate(self, stream):

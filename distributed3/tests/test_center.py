@@ -10,7 +10,6 @@ from distributed3.center import Center
 
 def test_metadata():
     c = Center('127.0.0.1', 8006)
-    c.listen(8006)
 
     @gen.coroutine
     def f():
