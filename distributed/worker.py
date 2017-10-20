@@ -2174,12 +2174,8 @@ class Worker(WorkerBase):
         self._memory_monitoring = True
         total = 0
         proc = psutil.Process()
-        frac = proc.memory_info().rss / self.memory_limit
-        if frac > min(self.memory_pause_fraction, self.memory_spill_fraction):
-            # Force a GC event so as to get more accurate memory usage
-            # measurements in case GC is lagging.
-            gc.collect()
-            frac = proc.memory_info().rss / self.memory_limit
+        memory = proc.memory_info().rss
+        frac = memory / self.memory_limit
 
         # Pause worker threads if above 80% memory use
         if self.memory_pause_fraction and frac > self.memory_pause_fraction:
@@ -2191,6 +2187,9 @@ class Worker(WorkerBase):
                             format_bytes(proc.memory_info().rss),
                             format_bytes(self.memory_limit))
                 self.paused = True
+                # Force a GC to make it faster to go out of the paused state
+                # in case of excessive GC lag.
+                gc.collect()
         elif self.paused:
             logger.warn("Worker at %d percent memory usage. Resuming worker."
                         " Process memory: %s -- Worker memory limit: %s",
@@ -2204,8 +2203,8 @@ class Worker(WorkerBase):
         if self.memory_spill_fraction and frac > self.memory_spill_fraction:
             target = self.memory_limit * self.memory_target_fraction
             count = 0
-
-            while proc.memory_info().rss > target:
+            need = memory - target
+            while memory > target:
                 if not self.data.fast:
                     logger.warn("Memory use is high but worker has no data "
                                 "to store to disk.  Perhaps some other process "
@@ -2215,9 +2214,26 @@ class Worker(WorkerBase):
                                 format_bytes(self.memory_limit))
                     break
                 k, v, weight = self.data.fast.evict()
+                del k, v
                 total += weight
                 count += 1
                 yield gen.moment
+                memory = proc.memory_info().rss
+                if total > need and memory > target:
+                    logger.warn("Lagged GC in eviction: evicted %s (needed %s)"
+                                % (total, need))
+                    logger.warn("Before GC: Process memory: %s -- "
+                                "Worker memory target: %s",
+                                format_bytes(memory),
+                                format_bytes(target))
+                    # Force a GC to ensure that evicted values are actually
+                    # freed and taken into account by the monitor.
+                    gc.collect()
+                    memory = proc.memory_info().rss
+                    logger.warn("After GC: Process memory: %s -- "
+                                "Worker memory target: %s",
+                                format_bytes(memory),
+                                format_bytes(target))
             if count:
                 logger.debug("Moved %d pieces of data data and %s to disk",
                              count, format_bytes(total))
