@@ -13,6 +13,7 @@ import threading
 import shutil
 import sys
 import weakref
+import gc
 
 from dask.core import istask
 from dask.compatibility import apply
@@ -2174,20 +2175,25 @@ class Worker(WorkerBase):
         total = 0
         proc = psutil.Process()
         frac = proc.memory_info().rss / self.memory_limit
+        if frac > min(self.memory_pause_fraction, self.memory_spill_fraction):
+            # Force a GC event so as to get more accurate memory usage
+            # measurements in case GC is lagging.
+            gc.collect()
+            frac = proc.memory_info().rss / self.memory_limit
 
         # Pause worker threads if above 80% memory use
         if self.memory_pause_fraction and frac > self.memory_pause_fraction:
             if not self.paused:
                 logger.warn("Worker is at %d percent memory usage.  "
-                            "Stopping work. "
+                            "Pausing worker. "
                             "Process memory: %s -- Worker memory limit: %s",
                             int(frac * 100),
                             format_bytes(proc.memory_info().rss),
                             format_bytes(self.memory_limit))
                 self.paused = True
         elif self.paused:
-            logger.warn("Worker at %d percent memory usage. Restarting work. "
-                        "Process memory: %s -- Worker memory limit: %s",
+            logger.warn("Worker at %d percent memory usage. Resuming worker."
+                        " Process memory: %s -- Worker memory limit: %s",
                         int(frac * 100),
                         format_bytes(proc.memory_info().rss),
                         format_bytes(self.memory_limit))
